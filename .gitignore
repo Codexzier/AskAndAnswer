@@ -1,0 +1,12 @@
+# Laufzeitdaten (Sprachmodelle, Aufnahmen, Transkripte)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Arduino build
+sketch/build/
