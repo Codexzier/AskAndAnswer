@@ -1,8 +1,0 @@
-# Offline-Spracherkennung (Echtzeit, deutsches Modell wird beim ersten Start geladen)
-vosk==0.3.45
-# Internetsuche ohne API-Schluessel (DuckDuckGo u. a.)
-ddgs==9.16.1
-
-# Optional: genauere Transkription nach der Aufnahme (AOUDA_TRANSCRIBE=whisper).
-# Braucht zusaetzlich ca. 300 MB RAM und etwa so lange wie die Aufnahme.
-# faster-whisper==1.2.1

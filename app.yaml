@@ -1,11 +1,3 @@
-name: AOUDA Sprachassistent
-icon: 🎙️
-description: "Sprachassistent mit Weckwort AOUDA: Fragen an eine lokale KI (mit Internetsuche) und Aufnahmen bis 10 Minuten mit Transkript - Anzeige auf dem 1.8 Zoll TFT"
-
-bricks:
-  - arduino:llm:
-      # Qwen 3.5 0.8B, 4-Bit (Modelldatei ca. 484 MB). Mit 4096 Token Kontext
-      # bleibt der Speicherbedarf des llama.cpp-Servers unter 1 GB.
-      model: llamacpp:Qwen3.5-0.8B-Q4_0
-      variables:
-        LLAMA_ARG_CTX_SIZE: "4096"
+name: TFT Test
+icon: 🖥️
+description: "Prueft das 1.8 Zoll TFT (ST7735) am UNO Q: animierter Text, nacheinander ueber Hardware-SPI D11/D13, Software-SPI D11/D13 und den JSPI-Stecker"
