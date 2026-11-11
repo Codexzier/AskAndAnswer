@@ -74,6 +74,15 @@ dem UNO Q aber ungefähr so lange wie die Aufnahme selbst.
 | SD       | MISO       | D12   |
 | SD       | CS         | D4 (wird nur deaktiviert) |
 
+> **Wichtig beim UNO Q:** Der 6‑polige Stecker **JSPI** (dort, wo beim UNO R3 der
+> ICSP‑Stecker sitzt) führt beim UNO Q **nicht** dieselben Signale wie D11/D13.
+> Viele 1,8"‑TFT‑Shields holen MOSI/SCK aber vom ICSP‑Stecker – auf dem UNO R3
+> fällt das nicht auf, auf dem UNO Q bleibt das Display dann leer. Der Sketch
+> steuert deshalb standardmäßig **beide** Anschlüsse gleichzeitig per Software‑SPI
+> an (`TFT_BUS_BOTH`). Das funktioniert immer, ein kompletter Bildaufbau dauert
+> aber ca. 1 s. Wenn du weißt, dass dein Shield D11/D13 nutzt, stelle in
+> `sketch/sketch.ino` `TFT_BUS` auf `TFT_BUS_HW_SPI` (deutlich schneller).
+
 ## Installation (per Git direkt auf dem UNO Q)
 
 Arduino‑Apps liegen auf dem Board unter `/home/arduino/ArduinoApps/`. Das
@@ -87,14 +96,14 @@ Repository ist direkt eine App (`app.yaml`, `python/`, `sketch/` im Hauptordner)
    ```
 
    ```bash
-   git clone -b claude/epic-hopper-vpw9wo https://github.com/Codexzier/AskAndAnswer.git aouda
+   git clone -b claude/epic-hopper-vpw9wo https://github.com/Codexzier/AskAndAnswer.git
    ```
 
 2. App starten – entweder in **Arduino App Lab** unter „Meine Apps“ → *AOUDA
    Sprachassistent* → **Start**, oder ohne App Lab im Terminal:
 
    ```bash
-   arduino-app-cli app start ~/ArduinoApps/aouda
+   arduino-app-cli app start ~/ArduinoApps/AskAndAnswer
    ```
 
    Beim ersten Start werden der Sketch kompiliert und geflasht, die
@@ -104,17 +113,17 @@ Repository ist direkt eine App (`app.yaml`, `python/`, `sketch/` im Hauptordner)
 3. Ausgaben/Fehler ansehen:
 
    ```bash
-   arduino-app-cli app logs ~/ArduinoApps/aouda
+   arduino-app-cli app logs ~/ArduinoApps/AskAndAnswer
    ```
 
 4. Aktualisieren:
 
    ```bash
-   cd ~/ArduinoApps/aouda && git pull
+   cd ~/ArduinoApps/AskAndAnswer && git pull
    ```
 
    ```bash
-   arduino-app-cli app restart ~/ArduinoApps/aouda
+   arduino-app-cli app restart ~/ArduinoApps/AskAndAnswer
    ```
 
 Falls das KI‑Modell nicht automatisch geladen wird:
@@ -173,8 +182,24 @@ Falls kein Mikrofon gefunden wird: prüfen, ob der Media Carrier aktiviert ist
    Fortschrittsbalken und Live‑Text. Ende mit **„AOUDA, stoppe Aufnahme“** oder
    automatisch nach 10 Minuten. Danach wird das Transkript angezeigt.
 
-Aufnahmen und Transkripte liegen in `~/ArduinoApps/aouda/data/recordings/`
+Aufnahmen und Transkripte liegen in `~/ArduinoApps/AskAndAnswer/data/recordings/`
 (`aufnahme_JJJJMMTT_HHMMSS.wav` und `.txt`).
+
+### Wenn das Display nichts anzeigt
+
+Direkt nach dem Flashen zeigt der Sketch **ohne Python** ein Testbild: oben fünf
+Farbbalken (rot, grün, blau, weiß, gelb), darunter „AOUDA“, der verwendete Bus und
+„Warte auf Linux…“.
+
+| Was du siehst | Ursache / Lösung |
+|---|---|
+| Hintergrundbeleuchtung aus | Shield bekommt keinen Strom (5V/3.3V/GND) oder sitzt nicht richtig |
+| Weiß, kein Testbild | Sketch läuft nicht (App‑Log prüfen, Sketch kompiliert?) oder Signale kommen nicht an (Pins prüfen) |
+| Testbild mit falschen Farben / Rand | `TFT_VARIANT` auf `TFT_GREENTAB` oder `TFT_REDTAB` stellen |
+| Testbild ok, bleibt bei „Warte auf Linux…“ | Python‑Teil läuft nicht: `arduino-app-cli app logs ~/ArduinoApps/AskAndAnswer` |
+
+Im Log steht beim Start `TFT: AOUDA-TFT 160x128 Soft-SPI D11/D13+JSPI`, wenn
+Python den Sketch erreicht, sonst `TFT: nicht erreichbar`.
 
 ### Tipps zum Weckwort „AOUDA“
 

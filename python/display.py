@@ -172,7 +172,8 @@ class Display:
         if not self._available and now < self._retry_at:
             return None
         try:
-            result = self._bridge.call(method, *args, timeout=5)
+            # grosszuegig: mit Software-SPI dauert ein ganzer Bildaufbau 1-2 s
+            result = self._bridge.call(method, *args, timeout=15)
             if not self._available:
                 log.info("TFT wieder erreichbar")
             self._available = True

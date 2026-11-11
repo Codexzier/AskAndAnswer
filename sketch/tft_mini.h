@@ -9,6 +9,14 @@
 // Zephyr fuehrt jeden SPI.transfer() als eigene Transaktion aus. Deshalb
 // werden Pixel immer zeilenweise in einem Puffer gesammelt und am Stueck
 // gesendet.
+//
+// Zwei Betriebsarten fuer die Datenleitungen:
+//  * Hardware-SPI: schnell, aber nur auf D11 (MOSI) / D13 (SCK).
+//  * Software-SPI: per digitalWrite auf frei waehlbaren Pins, optional auf
+//    zwei Pin-Paaren gleichzeitig. Beim UNO Q liegen am 6-poligen
+//    JSPI-Stecker (dort, wo beim UNO R3 der ICSP-Stecker sitzt) NICHT dieselben
+//    Signale wie an D11/D13. Viele TFT-Shields holen SPI aber vom ICSP-Stecker.
+//    Mit beiden Pin-Paaren funktioniert das Shield in jedem Fall.
 
 #pragma once
 #include <Arduino.h>
@@ -24,6 +32,11 @@ enum TftVariant : uint8_t {
 class TftMini {
 public:
   TftMini(uint8_t cs, uint8_t dc, int8_t rst, TftVariant variant, uint32_t spiHz);
+
+  // Software-SPI statt Hardware-SPI verwenden (vor begin() aufrufen).
+  // mosi2/sck2 = zweites Pin-Paar, das parallel angesteuert wird (-1 = keins).
+  void useSoftSpi(int8_t mosi, int8_t sck, int8_t mosi2 = -1, int8_t sck2 = -1);
+  bool softSpi() const { return _soft; }
 
   // rotation wie bei Adafruit (1 = Querformat 160x128)
   void begin(uint8_t rotation);
@@ -51,6 +64,7 @@ private:
   void runInitList(const uint8_t *list);
   void setWindow(int16_t x, int16_t y, int16_t w, int16_t h);
   void writeBuffer(uint8_t *buf, size_t len);   // Puffer wird ueberschrieben!
+  void softWrite(const uint8_t *buf, size_t len);
 
   static uint8_t decodeGlyphs(const char *utf8, uint8_t *out, uint8_t maxOut);
 
@@ -61,4 +75,6 @@ private:
   int16_t _width = 128, _height = 160;
   int16_t _xstart = 0, _ystart = 0;
   uint8_t _colstart = 0, _rowstart = 0;
+  bool _soft = false;
+  int8_t _mosi = -1, _sck = -1, _mosi2 = -1, _sck2 = -1;
 };

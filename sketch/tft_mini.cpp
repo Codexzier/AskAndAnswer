@@ -88,23 +88,56 @@ static uint8_t pixbuf[PIXBUF_BYTES];
 TftMini::TftMini(uint8_t cs, uint8_t dc, int8_t rst, TftVariant variant, uint32_t spiHz)
   : _cs(cs), _dc(dc), _rst(rst), _variant(variant), _spiHz(spiHz) {}
 
+void TftMini::useSoftSpi(int8_t mosi, int8_t sck, int8_t mosi2, int8_t sck2) {
+  _soft = true;
+  _mosi = mosi;
+  _sck = sck;
+  _mosi2 = mosi2;
+  _sck2 = sck2;
+}
+
 void TftMini::beginTx() {
-  SPI.beginTransaction(SPISettings(_spiHz, MSBFIRST, SPI_MODE0));
+  if (!_soft) SPI.beginTransaction(SPISettings(_spiHz, MSBFIRST, SPI_MODE0));
   digitalWrite(_cs, LOW);
 }
 
 void TftMini::endTx() {
   digitalWrite(_cs, HIGH);
-  SPI.endTransaction();
+  if (!_soft) SPI.endTransaction();
+}
+
+// SPI Mode 0 per digitalWrite: Daten anlegen, Takt hoch (Display liest), Takt runter
+void TftMini::softWrite(const uint8_t *buf, size_t len) {
+  int lastBit = -1;
+  for (size_t i = 0; i < len; i++) {
+    uint8_t b = buf[i];
+    for (uint8_t mask = 0x80; mask; mask >>= 1) {
+      int bit = (b & mask) ? HIGH : LOW;
+      if (bit != lastBit) {
+        digitalWrite(_mosi, bit);
+        if (_mosi2 >= 0) digitalWrite(_mosi2, bit);
+        lastBit = bit;
+      }
+      digitalWrite(_sck, HIGH);
+      if (_sck2 >= 0) digitalWrite(_sck2, HIGH);
+      digitalWrite(_sck, LOW);
+      if (_sck2 >= 0) digitalWrite(_sck2, LOW);
+    }
+  }
 }
 
 void TftMini::writeCommand(uint8_t cmd) {
   digitalWrite(_dc, LOW);
-  SPI.transfer(cmd);
+  if (_soft) softWrite(&cmd, 1);
+  else SPI.transfer(cmd);
   digitalWrite(_dc, HIGH);
 }
 
 void TftMini::writeData(const uint8_t *data, size_t len) {
+  if (_soft) {
+    softWrite(data, len);
+    return;
+  }
   uint8_t tmp[16];
   while (len > 0) {
     size_t n = len < sizeof(tmp) ? len : sizeof(tmp);
@@ -144,7 +177,16 @@ void TftMini::begin(uint8_t rotation) {
   pinMode(_dc, OUTPUT);
   digitalWrite(_cs, HIGH);
   digitalWrite(_dc, HIGH);
-  SPI.begin();
+  if (_soft) {
+    const int8_t pins[4] = { _mosi, _sck, _mosi2, _sck2 };
+    for (int8_t pin : pins) {
+      if (pin < 0) continue;
+      pinMode(pin, OUTPUT);
+      digitalWrite(pin, LOW);
+    }
+  } else {
+    SPI.begin();
+  }
 
   if (_rst >= 0) {
     pinMode(_rst, OUTPUT);
@@ -205,7 +247,8 @@ void TftMini::setWindow(int16_t x, int16_t y, int16_t w, int16_t h) {
 }
 
 void TftMini::writeBuffer(uint8_t *buf, size_t len) {
-  SPI.transfer(buf, len);
+  if (_soft) softWrite(buf, len);
+  else SPI.transfer(buf, len);
 }
 
 void TftMini::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
