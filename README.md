@@ -129,12 +129,47 @@ Falls kein Mikrofon gefunden wird: prüfen, ob der Media Carrier aktiviert ist
 
 ## Bedienung
 
-1. Nach dem Start zeigt das TFT **„AOUDA ist bereit“**.
-2. **„AOUDA, ich habe eine Frage“** → Kopfzeile *Deine Frage?* → Frage stellen.
-   Nach 1,5 s Pause wird die Frage abgeschickt. Der Antworttext erscheint, während
-   die KI ihn erzeugt. Lange Antworten werden durchgeblättert (`1/3`, `2/3`, …),
-   bis der nächste Befehl kommt.
-3. **„AOUDA, starte Aufnahme“** → rote Kopfzeile `REC 00:12 / 10:00` mit
+### Bildschirmaufbau
+
+```
+┌────────────────────────────┐
+│ AOUDA ist bereit           │  Kopfzeile (Modus)
+│ Sprachbefehle:             │
+│ AOUDA, ich habe eine       │  weiß = Befehl verfügbar
+│   Frage                    │
+│ AOUDA, starte Aufnahme     │  grün = Befehl erkannt
+│ AOUDA, stoppe Aufnahme     │  grau = nur während einer Aufnahme
+│   (nur während Aufnahme)   │
+│ > auto ich habe            │  Fußzeile: was gerade gehört wird
+├────────────────────────────┤
+│ CPU 14% RAM 63% Mic -32dB  │  Statuszeile
+│ ████████████░░░░░░░░░░░░░░ │  Mikrofonpegel
+└────────────────────────────┘
+```
+
+* **Befehlsübersicht:** Wird ein Sprachbefehl erkannt, wechselt sein Satz von
+  **weiß auf grün** und die Fußzeile zeigt z. B. „Erkannt: Aufnahme starten“.
+  Nach 0,8 s wechselt der Bildschirm. Während der Aufnahme steht
+  „AOUDA, stoppe Aufnahme“ weiß in der Fußzeile und wird beim Erkennen grün.
+* **Fußzeile:** `> …` zeigt live, was die Spracherkennung gerade hört.
+  `? …` heißt: gehört, aber nicht als Befehl erkannt. „? nicht verstanden“
+  heißt: Sprache erkannt, aber nichts Passendes.
+* **Statuszeile:** CPU‑Last und RAM‑Belegung des ganzen Boards (grün / gelb ab
+  50 % bzw. 70 % / rot ab 80 % bzw. 85 %) und der Mikrofonpegel in dBFS. Der
+  Balken ganz unten zeigt den Pegel von -60 dB (leer) bis 0 dB (voll): grau =
+  leise, **grün = Sprache** (ab -42 dB), rot = Übersteuerung (ab -3 dB).
+  Bewegt sich der Balken beim Sprechen nicht, kommt kein Ton vom Mikrofon an.
+* Antworten und Transkripte bleiben 60 s stehen (lange Texte werden
+  durchgeblättert), danach erscheint wieder die Befehlsübersicht.
+
+### Ablauf
+
+1. Nach dem Start zeigt das TFT **„AOUDA ist bereit“** mit allen Sprachbefehlen.
+2. **„AOUDA, ich habe eine Frage“** → der Satz wird grün → Kopfzeile *Deine
+   Frage?* → Frage stellen. Nach 1,5 s Pause wird die Frage abgeschickt. Der
+   Antworttext erscheint, während die KI ihn erzeugt. Lange Antworten werden
+   durchgeblättert (`1/3`, `2/3`, …).
+3. **„AOUDA, starte Aufnahme“** → der Satz wird grün → rote Kopfzeile `REC 00:12 / 10:00` mit
    Fortschrittsbalken und Live‑Text. Ende mit **„AOUDA, stoppe Aufnahme“** oder
    automatisch nach 10 Minuten. Danach wird das Transkript angezeigt.
 
@@ -148,8 +183,11 @@ einer festen Grammatik aus Wörtern, die das Sprachmodell kennt und die wie „A
 klingen (z. B. „auto“, „audi“, „oda“) – kombiniert mit dem Befehlssatz. Zusätzlich
 wird der Text phonetisch (Kölner Phonetik) und unscharf verglichen.
 
+* Zuerst auf den Pegelbalken achten: Er muss beim Sprechen grün werden. Bleibt er
+  grau, ist das Mikrofon zu leise oder das falsche Gerät ausgewählt (`mic_device`).
 * Wird ein Satz nicht als Befehl erkannt, steht er mit `?` in der Fußzeile und im
-  Log (`Gehoert: '...'`).
+  Log (`Gehoert: '...'`). Steht dahinter eine Zahl in Klammern, war die Konfidenz
+  zu niedrig (→ `min_confidence` senken).
 * Taucht dort eine andere Schreibweise auf, diese in `wake_words` in
   `python/config.py` ergänzen.
 * Klappt es gar nicht, `wake_mode` auf `"free"` stellen (freie Erkennung +
@@ -172,6 +210,8 @@ geändert werden (oder per Umgebungsvariable):
 | `transcribe_engine` | `AOUDA_TRANSCRIBE` | `vosk` | `vosk` (Echtzeit) oder `whisper` |
 | `whisper_model` | `AOUDA_WHISPER_MODEL` | `base` | `tiny`, `base`, `small` … |
 | `page_seconds` | `AOUDA_PAGE_SECONDS` | `7` | Anzeigedauer pro Seite |
+| `confirm_s` | `AOUDA_CONFIRM_SECONDS` | `0.8` | so lange bleibt ein erkannter Befehl grün stehen |
+| `result_hold_s` | `AOUDA_RESULT_SECONDS` | `60` | Anzeigedauer von Antwort/Transkript, danach Befehlsübersicht |
 
 Für `whisper` zusätzlich in `python/requirements.txt` die Zeile
 `faster-whisper==1.2.1` aktivieren.

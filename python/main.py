@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from typing import Callable
 
 import numpy as np
 
@@ -28,6 +29,7 @@ from commands import QUESTION, RECORD_START, RECORD_STOP, find_command
 from config import Config
 from recorder import Recording, format_duration, transcribe_whisper
 from speech import Recognizer, SpeechEngine, ensure_vosk_model, to_pcm16_mono
+from sysstats import LevelMeter, SystemStats
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 log = logging.getLogger("aouda")
@@ -38,6 +40,36 @@ BUSY = "busy"
 RECORDING = "recording"
 
 HINT = "Sag: AOUDA, ..."
+STOP_SENTENCE = "AOUDA, stoppe Aufnahme"
+
+# Befehlsuebersicht auf dem TFT: (Befehl, Zeile). Ein erkannter Befehl wird gruen.
+COMMAND_OVERVIEW = [
+    (None, "Sprachbefehle:"),
+    (QUESTION, "AOUDA, ich habe eine"),
+    (QUESTION, "  Frage"),
+    (None, ""),
+    (RECORD_START, "AOUDA, starte Aufnahme"),
+    (None, ""),
+    (RECORD_STOP, STOP_SENTENCE),
+    (RECORD_STOP, "  (nur während Aufnahme)"),
+]
+COMMAND_NAMES = {QUESTION: "Frage", RECORD_START: "Aufnahme starten", RECORD_STOP: "Aufnahme stoppen"}
+
+
+def command_overview(highlight: str | None = None) -> tuple[list[str], list[int]]:
+    """Zeilen und Farben der Befehlsuebersicht (aktive Befehle weiss, erkannter gruen)."""
+    lines, colors = [], []
+    for command, line in COMMAND_OVERVIEW:
+        lines.append(line)
+        if command is None:
+            colors.append(tft.GRAY)
+        elif command == highlight:
+            colors.append(tft.GREEN)
+        elif command == RECORD_STOP:
+            colors.append(tft.DARKGRAY)       # nur waehrend einer Aufnahme gueltig
+        else:
+            colors.append(tft.WHITE)
+    return lines, colors
 
 cfg = Config()
 display = tft.Display(Bridge)
@@ -68,6 +100,16 @@ class Aouda:
         self.mic = None
         self._reset_wake = False
         self._screen = ""
+        # verzoegerter Bildschirmwechsel: (Zeitpunkt, Zeichenfunktion)
+        self._deferred: tuple[float, Callable[[], None]] | None = None
+        self._idle_heard = False
+        self._idle_feedback_at = 0.0
+
+        # Statuszeile
+        self.meter = LevelMeter()
+        self.stats = SystemStats()
+        self._level_at = 0.0
+        self._stats_at = 0.0
 
         # Frage
         self._q_start = 0.0
@@ -137,6 +179,8 @@ class Aouda:
                 self.process(pcm)
         except Exception as exc:
             log.exception("Fehler in der Hauptschleife")
+            self._screen = "error"
+            self._deferred = None
             display.new_screen("Fehler", tft.RED, "Neustart in 5 s", tft.RED)
             display.text(str(exc), tft.WHITE, tail=False)
             if self.mic is not None:
@@ -147,6 +191,9 @@ class Aouda:
             time.sleep(5)
 
     def process(self, pcm: np.ndarray) -> None:
+        now = time.monotonic()
+        self.update_status(pcm, now)
+
         if self.state == IDLE:
             self.handle_idle(pcm)
         elif self.state == QUESTION_LISTEN:
@@ -155,34 +202,76 @@ class Aouda:
             self.handle_recording(pcm)
         # BUSY: Audio verwerfen, waehrend die KI antwortet / transkribiert wird
 
+        if self._deferred is not None and now >= self._deferred[0]:
+            draw = self._deferred[1]
+            self._deferred = None
+            draw()
+
+    def update_status(self, pcm: np.ndarray, now: float) -> None:
+        """Mikrofonpegel (mehrmals pro Sekunde) und CPU/RAM (jede Sekunde)."""
+        self.meter.add(pcm)
+        if now - self._level_at >= self.cfg.level_interval_s:
+            self._level_at = now
+            display.mic_level(self.meter.take())
+        if now - self._stats_at >= self.cfg.stats_interval_s:
+            self._stats_at = now
+            display.system(self.stats.cpu_percent(), self.stats.ram_percent())
+
+    def confirm(self, command: str, then: Callable[[], None] | None = None) -> None:
+        """Zeigt den erkannten Befehl gruen an; `then` zeichnet nach confirm_s den naechsten Bildschirm."""
+        log.info("Befehl erkannt: %s", COMMAND_NAMES[command])
+        self.show_idle(highlight=command)
+        if then is not None:
+            self._deferred = (time.monotonic() + self.cfg.confirm_s, then)
+
     # ------------------------------------------------------------------
     # Bereit: auf "AOUDA, ..." warten
     # ------------------------------------------------------------------
-    def show_idle(self, footer: str = "") -> None:
+    def show_idle(self, footer: str = "", footer_color: int = tft.GRAY,
+                  highlight: str | None = None, expect_generation: int | None = None) -> None:
+        """Befehlsuebersicht; ist sie schon zu sehen, werden nur Aenderungen gezeichnet."""
+        lines, colors = command_overview(highlight)
+        if highlight:
+            footer, footer_color = "Erkannt: " + COMMAND_NAMES[highlight], tft.GREEN
+        elif not footer:
+            footer = "Warte auf Weckwort..."
+
+        if self._screen == "idle" and expect_generation is None:
+            display.header("AOUDA ist bereit", tft.GREEN)
+            display.lines(lines, tft.WHITE, colors)
+            display.footer(footer, footer_color)
+            return
+        if display.new_screen("AOUDA ist bereit", tft.GREEN, footer, footer_color,
+                              expect_generation=expect_generation) is None:
+            return   # inzwischen wird etwas anderes angezeigt
         self._screen = "idle"
-        display.new_screen("AOUDA ist bereit", tft.GREEN, footer or "Warte auf Weckwort", tft.GRAY)
-        display.lines([
-            "Sage:",
-            "",
-            "AOUDA, ich habe eine",
-            "       Frage",
-            "",
-            "AOUDA, starte Aufnahme",
-            "",
-            "(Aufnahme beenden:",
-            " AOUDA, stoppe Aufnahme)",
-        ], tft.WHITE, [tft.GRAY, tft.WHITE, tft.CYAN, tft.CYAN, tft.WHITE, tft.ORANGE,
-                       tft.WHITE, tft.GRAY, tft.GRAY])
+        display.lines(lines, tft.WHITE, colors)
 
     def handle_idle(self, pcm: np.ndarray) -> None:
         if self._reset_wake:
             self.wake_rec.reset()
             self._reset_wake = False
         event = self.wake_rec.feed(pcm.tobytes())
-        if event is None or not event.final:
+        if event is None or self._deferred is not None:
+            return
+
+        if event.final is None:
+            # Rueckmeldung, dass gerade etwas gehoert wird
+            now = time.monotonic()
+            if event.partial and now - self._idle_feedback_at > 0.3:
+                self._idle_feedback_at = now
+                self._idle_heard = True
+                display.footer("> " + event.partial, tft.GRAY)
             return
 
         text = event.final
+        if not text:
+            if self._idle_heard:
+                display.footer("? nicht verstanden", tft.DARKGRAY)
+            self._idle_heard = False
+            return
+        self._idle_heard = False
+
         match = find_command(text, [QUESTION, RECORD_START, RECORD_STOP],
                              require_wake=self.cfg.wake_required,
                              threshold=self.cfg.match_threshold,
@@ -192,37 +281,42 @@ class Aouda:
 
         if match and self.grammar_mode and event.confidence < self.cfg.min_confidence:
             log.info("Konfidenz zu niedrig, ignoriert")
-            match = None
+            display.footer(f"? {text} ({event.confidence:.2f})", tft.DARKGRAY)
+            return
 
         if not match:
-            if self._screen == "idle":
-                display.footer(f"? {text}", tft.DARKGRAY)
+            display.footer(f"? {text}", tft.DARKGRAY)
             return
 
         self.wake_rec.reset()
         if match.command == QUESTION:
             words = match.after.split()
             if not self.grammar_mode and len(words) >= 3:
-                self.ask(match.after)    # Frage direkt im selben Satz gestellt
+                self.confirm(QUESTION)
+                self.ask(match.after, delay=self.cfg.confirm_s)   # Frage direkt im selben Satz
             else:
                 self.start_question()
         elif match.command == RECORD_START:
             self.start_recording()
         else:
-            display.footer("Keine Aufnahme aktiv", tft.ORANGE)
+            self.show_idle("Keine Aufnahme aktiv", tft.ORANGE)
 
     # ------------------------------------------------------------------
     # Frage
     # ------------------------------------------------------------------
     def start_question(self) -> None:
         self.state = QUESTION_LISTEN
-        self._screen = "question"
         self.free_rec.reset()
         now = time.monotonic()
         self._q_start = now
         self._q_last_voice = now
         self._q_final = ""
         self._q_partial = ""
+        self._q_draw = 0.0
+        self.confirm(QUESTION, self._draw_question_screen)
+
+    def _draw_question_screen(self) -> None:
+        self._screen = "question"
         display.new_screen("Deine Frage?", tft.CYAN, "Ich höre zu...", tft.CYAN)
         display.lines(["Stelle jetzt deine Frage."], tft.GRAY)
 
@@ -240,7 +334,7 @@ class Aouda:
                     self._q_last_voice = now
                 self._q_partial = event.partial
 
-        if (self._q_final or self._q_partial) and now - self._q_draw > 0.25:
+        if (self._q_final or self._q_partial) and now - self._q_draw > 0.25 and self._deferred is None:
             display.live(self._q_final, self._q_partial)
             self._q_draw = now
 
@@ -248,7 +342,8 @@ class Aouda:
         if not has_text and now - self._q_start > self.cfg.question_timeout_s:
             self.state = IDLE
             self._reset_wake = True
-            self.show_idle("Keine Frage gehört")
+            self._deferred = None
+            self.show_idle("Keine Frage gehört", tft.ORANGE)
             return
 
         if has_text and (now - self._q_last_voice > self.cfg.question_pause_s
@@ -259,17 +354,19 @@ class Aouda:
                 question = self._q_partial
             self.ask(question)
 
-    def ask(self, question: str) -> None:
+    def ask(self, question: str, delay: float = 0.0) -> None:
         self.state = BUSY
-        self._screen = "answer"
-        threading.Thread(target=self._answer_worker, args=(question,), daemon=True).start()
+        self._deferred = None
+        threading.Thread(target=self._answer_worker, args=(question, delay), daemon=True).start()
 
-    def _answer_worker(self, question: str) -> None:
+    def _answer_worker(self, question: str, delay: float = 0.0) -> None:
+        time.sleep(delay)
+        self._screen = "answer"
         question = question.strip()
         if question:
             question = question[0].upper() + question[1:] + ("" if question.endswith("?") else "?")
         log.info("Frage: %s", question)
-        display.new_screen("Frage", tft.CYAN, "Denke nach...", tft.YELLOW)
+        generation = display.new_screen("Frage", tft.CYAN, "Denke nach...", tft.YELLOW)
         display.text(question, tft.CYAN, tail=False)
 
         answer_started = [False]
@@ -291,6 +388,8 @@ class Aouda:
             display.text(f"Die KI ist nicht erreichbar: {exc}", tft.WHITE, tail=False)
             display.footer(HINT, tft.GRAY)
             self._back_to_idle()
+            time.sleep(10)
+            self.show_idle(expect_generation=generation)
             return
 
         log.info("Antwort (%.1f s%s): %s", answer.seconds,
@@ -299,7 +398,9 @@ class Aouda:
         footer = ("Quelle: " + answer.sources[0]) if answer.sources else HINT
         self._back_to_idle()
         text = answer.text or "Darauf habe ich leider keine Antwort."
-        display.show_paged(text, tft.WHITE, self.cfg.page_seconds, footer, tft.GRAY)
+        if display.show_paged(text, tft.WHITE, self.cfg.page_seconds, footer, tft.GRAY,
+                              max_seconds=self.cfg.result_hold_s):
+            self.show_idle(expect_generation=generation)
 
     def _back_to_idle(self) -> None:
         self._reset_wake = True
@@ -315,9 +416,13 @@ class Aouda:
         self._rec_draw = 0.0
         self._rec_second = -1
         self.state = RECORDING
-        self._screen = "recording"
         log.info("Aufnahme gestartet: %s", self.recording.wav_path)
-        display.new_screen(self._rec_title(), tft.RED, "Stopp: AOUDA, stoppe Aufn.", tft.ORANGE)
+        self.confirm(RECORD_START, self._draw_recording_screen)
+
+    def _draw_recording_screen(self) -> None:
+        self._screen = "recording"
+        self._rec_second = -1
+        display.new_screen(self._rec_title(), tft.RED, STOP_SENTENCE, tft.WHITE)
         display.lines(["Aufnahme läuft..."], tft.GRAY)
 
     def _rec_title(self) -> str:
@@ -342,6 +447,8 @@ class Aouda:
                         self.free_rec.flush()   # Rest des Stopp-Satzes verwerfen
                     rec.add_sentence(match.before)
                     self._rec_partial = ""
+                    if self._deferred is None:
+                        display.footer(STOP_SENTENCE, tft.GREEN)   # erkannt -> gruen
                     self.stop_recording("Aufnahme beendet")
                     return
                 if event.final is not None:
@@ -350,30 +457,35 @@ class Aouda:
                 else:
                     self._rec_partial = event.partial or ""
 
-        second = int(rec.seconds)
-        if second != self._rec_second:
-            self._rec_second = second
-            display.header(self._rec_title(), tft.RED, tft.WHITE)
-            display.progress(rec.fraction, tft.RED)
-        if now - self._rec_draw > 0.3:
-            self._rec_draw = now
-            if rec.sentences or self._rec_partial:
-                display.live(rec.live_text, self._rec_partial)
+        if self._deferred is None:   # sonst steht noch die Befehlsuebersicht da
+            second = int(rec.seconds)
+            if second != self._rec_second:
+                self._rec_second = second
+                display.header(self._rec_title(), tft.RED, tft.WHITE)
+                display.progress(rec.fraction, tft.RED)
+            if now - self._rec_draw > 0.3:
+                self._rec_draw = now
+                if rec.sentences or self._rec_partial:
+                    display.live(rec.live_text, self._rec_partial)
 
         if rec.full:
             rest = self.free_rec.flush()
             rec.add_sentence(rest.final or "")
+            if self._deferred is None:
+                display.footer("Zeitlimit erreicht", tft.ORANGE)
             self.stop_recording("10 Minuten erreicht")
 
     def stop_recording(self, reason: str) -> None:
         rec = self.recording
         rec.close()
         self.state = BUSY
-        self._screen = "transcript"
+        self._deferred = None
         log.info("%s nach %s: %s", reason, format_duration(rec.seconds), rec.wav_path)
         threading.Thread(target=self._transcribe_worker, args=(rec, reason), daemon=True).start()
 
     def _transcribe_worker(self, rec: Recording, reason: str) -> None:
+        time.sleep(self.cfg.confirm_s)   # gruene Bestaetigung kurz stehen lassen
+        self._screen = "transcript"
         duration = format_duration(rec.seconds)
         text = rec.live_text
         if self.cfg.transcribe_engine.lower() == "whisper":
@@ -401,9 +513,11 @@ class Aouda:
             log.exception("Transkript konnte nicht gespeichert werden")
             saved = "nicht gespeichert!"
 
-        display.new_screen(f"Transkript {duration}", tft.MAGENTA, saved, tft.GRAY)
+        generation = display.new_screen(f"Transkript {duration}", tft.MAGENTA, saved, tft.GRAY)
         self._back_to_idle()
-        display.show_paged(text, tft.WHITE, self.cfg.page_seconds, HINT, tft.GRAY)
+        if display.show_paged(text, tft.WHITE, self.cfg.page_seconds, saved, tft.GRAY,
+                              max_seconds=self.cfg.result_hold_s):
+            self.show_idle(expect_generation=generation)
 
 
 aouda = Aouda(cfg)

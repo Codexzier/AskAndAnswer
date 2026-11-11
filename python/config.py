@@ -99,6 +99,13 @@ class Config:
 
     # --- Anzeige -------------------------------------------------------------
     page_seconds: float = field(default_factory=lambda: _env_float("AOUDA_PAGE_SECONDS", 7.0))
+    # So lange bleibt ein erkannter Befehl gruen markiert, bevor der Bildschirm wechselt
+    confirm_s: float = field(default_factory=lambda: _env_float("AOUDA_CONFIRM_SECONDS", 0.8))
+    # So lange werden Antwort/Transkript angezeigt, danach wieder die Befehlsuebersicht
+    result_hold_s: float = field(default_factory=lambda: _env_float("AOUDA_RESULT_SECONDS", 60.0))
+    # Aktualisierung der Statuszeile (Mikrofonpegel / CPU+RAM) in Sekunden
+    level_interval_s: float = 0.2
+    stats_interval_s: float = 1.0
 
     # --- Pfade -----------------------------------------------------------------
     data_dir: Path = DATA_DIR
